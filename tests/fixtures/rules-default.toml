@@ -1,0 +1,15 @@
+[rules.modulo]
+name = "modulo"
+enabled = true
+[[rules.modulo.entries]]
+at = 5
+prompt = "I%5 sync"
+[[rules.modulo.entries]]
+at = 7
+prompt = "I%7 backward"
+[[rules.modulo.entries]]
+at = 11
+prompt = "I%11 deep review"
+[[rules.modulo.entries]]
+at = 15
+prompt = "I%15 guard cycle"
