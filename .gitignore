@@ -41,3 +41,4 @@ auth.json
 # GitNexus cache
 .gitnexus/
 .gitnexusignore
+.ralph-admin/
