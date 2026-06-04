@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+bin/
+
+# Runtime
+*.log
+*.pid
+*.seed
+
+# State files (NEVER commit ralph state)
+.ralph-*/
+ralph-loop.state.json
+
+# Test artifacts
+tests/tmp/
+coverage/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets — NEVER commit
+auth.json
+*-keys.json
+.env
+.env.*
+!.env.example
+
+# Debug
+*.tsbuildinfo
+
+# GitNexus cache
+.gitnexus/
+.gitnexusignore
