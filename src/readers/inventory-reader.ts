@@ -17,6 +17,7 @@ export class InventoryReader {
 
   /** Compute completion percentage (0–100) based on fully_works / total. */
   completionPercentage(inv: Inventory): number {
+    if (!inv.phases) return 0;
     let total = 0;
     let done = 0;
     for (const phase of Object.values(inv.phases)) {
@@ -32,6 +33,7 @@ export class InventoryReader {
   /** Count tasks grouped by status across all phases. */
   countByStatus(inv: Inventory): Record<TaskStatus, number> {
     const counts: Record<TaskStatus, number> = { pending: 0, in_progress: 0, tested: 0, fully_works: 0 };
+    if (!inv.phases) return counts;
     for (const phase of Object.values(inv.phases)) {
       for (const task of Object.values(phase.tasks)) {
         counts[task.status]++;
@@ -42,6 +44,7 @@ export class InventoryReader {
 
   /** Format progress as compact string: "50% (2/4)" */
   formatProgress(inv: Inventory): string {
+    if (!inv.phases) return "N/A";
     let total = 0;
     let done = 0;
     for (const phase of Object.values(inv.phases)) {
