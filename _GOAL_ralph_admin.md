@@ -140,3 +140,43 @@ Tracked at `.ralph-admin/inventory.json` with tasks matching the plan:
 | `pause --after-cycle` | Needs ralph engine `.pause-requested` sentinel |
 | TUI dashboard | v0.1 is CLI only |
 | Remote fleet | Needs SSH/agent protocol |
+
+## Progress Tracking with State Transitions
+
+**User intent:** "we like what items being TODO - WIP -> REVIEW -> reject -> WIP again"
+
+Ralph loops write custom `*-state.json` files (e.g., `fix-state.json`, `wire-state.json`)
+under `flow/plans/`. Each has items with a `status` field that moves through the lifecycle:
+
+```
+todo → wip → review → verified (done)
+                  ↘ rejected → wip (rework)
+```
+
+### What ralph-admin must do
+
+1. **Discover** all `*-state.json` files under `flow/plans/` (recursive)
+2. **Read** item progress — normalize different schemas (`bugs[]`, `items[]`) into a unified view
+3. **Track state changes over time** — detect when items move between statuses
+4. **Identify regressions** — DONE/REVIEW → WIP/TODO/REJECTED means something went backward
+
+### How it works
+
+**`ralph-admin progress [name]`** — show item-level progress grouped by status phase.
+**`ralph-admin progress --history`** — show full transition timeline.
+**`ralph-admin progress --regressions`** — show only items that regressed.
+
+**Transition tracking** is automatic via a file watcher daemon:
+- `ralph-admin-watchd <project-dir>` watches `flow/plans/` for `*-state.json` writes
+- On any change, diffs against last snapshot, appends transitions to `.transitions.jsonl`
+- Flags regressions in real-time
+- Run as PM2 process alongside ralph loops
+
+**Key files:**
+- `src/schemas/goal-state.ts` — `TrackedItem`, `canonicalPhase()`, `isRegression()`
+- `src/readers/goal-state-reader.ts` — discovers and reads `*-state.json` files
+- `src/watchd.ts` — file watcher daemon
+- `src/cli.ts` — `progress` command reads `.transitions.jsonl` for display
+
+**Regression = any transition that moves backward in the lifecycle.**
+A verified item being rejected is a regression. A rejected item going back to wip is NOT — that's rework (forward).

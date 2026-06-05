@@ -16,7 +16,17 @@ PM2-integrated ralph fleet manager.
 | `restart <name>` | Hard restart |
 | `doctor` | Fleet-wide health check |
 | `inventory <name>` | Show task progress |
+| `progress [name]` | Show item-level progress from `*-state.json` files |
 | `inject-header <name>` | Inject working-dir header into _GOAL |
+
+### watchd (file watcher daemon)
+
+```
+ralph-admin-watchd <project-dir>
+```
+
+Watches `flow/plans/` for `*-state.json` changes. Auto-records transitions.
+Run as PM2 process alongside ralph loops.
 
 ## Install
 
