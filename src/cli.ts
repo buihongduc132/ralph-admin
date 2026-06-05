@@ -9,7 +9,9 @@ import { RulesReader } from "./readers/rules-reader";
 import { GoalFileManager } from "./readers/goal-reader";
 import { ScaffoldBuilder } from "./scaffold";
 import { Doctor } from "./doctor";
-import { formatListTable, formatDoctorOutput, formatUptime, formatStatus } from "./formatter";
+import { formatListTable, formatDoctorOutput, formatUptime, formatStatus, formatGoalProgress, formatTransitionSummary } from "./formatter";
+import { GoalStateReader } from "./readers/goal-state-reader";
+import { TransitionTracker } from "./transition-tracker";
 
 const program = new Command()
   .name("ralph-admin")
@@ -86,6 +88,21 @@ program.command("status <name>").description("Detailed status of one loop").acti
   if (rules) {
     const modulos = new RulesReader("").getActiveModulos(rules);
     console.log(`\nModulos:   ${modulos.map(m => `I%${m.at}`).join(", ")}`);
+  }
+
+  // Discover and show goal state files (custom *-state.json)
+  const goalReader = new GoalStateReader();
+  const goalStates = goalReader.discoverAll(proc.cwd);
+  if (goalStates.length > 0) {
+    const tracker = new TransitionTracker();
+    console.log(`\nGoal State Files (${goalStates.length}):`);
+    for (const gs of goalStates) {
+      const done = gs.items.filter(i => i.phase === "DONE").length;
+      const total = gs.items.length;
+      const summary = tracker.summarize(gs.filePath);
+      const regStr = summary.regressions > 0 ? ` ⚠️ ${summary.regressions} regressions` : "";
+      console.log(`  ${gs.name} (${gs.kind}): ${done}/${total} done${regStr}`);
+    }
   }
 });
 
@@ -279,5 +296,88 @@ program.command("inject-header <name>").description("Inject working-dir header i
   });
   console.log(`Header injected into _GOAL file for ${name}`);
 });
+
+// ── progress ──────────────────────────────────────────────
+program.command("progress [name]")
+  .description("Show item-level progress from *-state.json files. Omit name for all loops.")
+  .option("--track", "Record current state as transition snapshot", false)
+  .option("--history", "Show full transition history", false)
+  .option("--regressions", "Show only regressions (rejected/reverted items)", false)
+  .action((name: string | undefined, opts: { track: boolean; history: boolean; regressions: boolean }) => {
+    const goalReader = new GoalStateReader();
+    const tracker = new TransitionTracker();
+
+    // Determine which CWDs to scan
+    const targets: Array<{ label: string; cwd: string }> = [];
+    if (name) {
+      const procs = pm2.listRalph();
+      const proc = pm2.findByName(procs, name);
+      if (!proc) {
+        // Fallback: treat name as a directory path
+        targets.push({ label: name, cwd: name });
+      } else {
+        targets.push({ label: proc.name, cwd: proc.cwd });
+      }
+    } else {
+      const procs = pm2.listRalph();
+      for (const p of procs) {
+        targets.push({ label: p.name, cwd: p.cwd });
+      }
+    }
+
+    let found = false;
+    for (const { label, cwd } of targets) {
+      const goalStates = goalReader.discoverAll(cwd);
+      if (goalStates.length === 0) continue;
+      found = true;
+
+      console.log(`\n${"═".repeat(60)}`);
+      console.log(`  ${label}`);
+      console.log(`${"═".repeat(60)}`);
+
+      for (const gs of goalStates) {
+        // Optionally record transitions
+        if (opts.track) {
+          const newTransitions = tracker.record(gs);
+          if (newTransitions.length > 0) {
+            console.log(`\n  📝 Recorded ${newTransitions.length} new transitions:`);
+            console.log(formatTransitionSummary(newTransitions));
+          }
+        }
+
+        console.log(formatGoalProgress(gs));
+
+        // Show transition summary
+        const summary = tracker.summarize(gs.filePath);
+        if (summary.total > 0) {
+          console.log(`  Transitions: ${summary.total} total (${summary.forward} forward, ${summary.regressions} regressions, ${summary.newItem} new)`);
+        }
+
+        // Show history if requested
+        if (opts.history) {
+          const history = tracker.readHistory(gs.filePath);
+          if (history.length > 0) {
+            console.log(`\n  Timeline:`);
+            console.log(tracker.formatTimeline(history));
+          }
+        }
+
+        // Show regressions if requested
+        if (opts.regressions) {
+          const regressions = tracker.findRegressions(gs.filePath);
+          if (regressions.length > 0) {
+            console.log(`\n  ⚠️ Regressions:`);
+            console.log(tracker.formatTimeline(regressions));
+          } else {
+            console.log(`\n  ✅ No regressions detected.`);
+          }
+        }
+      }
+    }
+
+    if (!found) {
+      console.log(name ? `No *-state.json files found under ${name}` : "No *-state.json files found in any running loop.");
+    }
+  });
 
 program.parse();
