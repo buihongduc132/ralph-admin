@@ -9,9 +9,9 @@ import { RulesReader } from "./readers/rules-reader";
 import { GoalFileManager } from "./readers/goal-reader";
 import { ScaffoldBuilder } from "./scaffold";
 import { Doctor } from "./doctor";
-import { formatListTable, formatDoctorOutput, formatUptime, formatStatus, formatGoalProgress, formatTransitionSummary } from "./formatter";
+import { formatListTable, formatDoctorOutput, formatUptime, formatStatus, formatGoalProgress } from "./formatter";
 import { GoalStateReader } from "./readers/goal-state-reader";
-import { TransitionTracker } from "./transition-tracker";
+import { isRegression, canonicalPhase } from "./schemas/goal-state";
 
 const program = new Command()
   .name("ralph-admin")
@@ -94,13 +94,24 @@ program.command("status <name>").description("Detailed status of one loop").acti
   const goalReader = new GoalStateReader();
   const goalStates = goalReader.discoverAll(proc.cwd);
   if (goalStates.length > 0) {
-    const tracker = new TransitionTracker();
     console.log(`\nGoal State Files (${goalStates.length}):`);
     for (const gs of goalStates) {
       const done = gs.items.filter(i => i.phase === "DONE").length;
       const total = gs.items.length;
-      const summary = tracker.summarize(gs.filePath);
-      const regStr = summary.regressions > 0 ? ` ⚠️ ${summary.regressions} regressions` : "";
+      // Read transition log if exists
+      const logPath = gs.filePath.replace(/\.json$/, ".transitions.jsonl");
+      let regStr = "";
+      if (existsSync(logPath)) {
+        try {
+          const { readFileSync } = require("fs");
+          const lines = readFileSync(logPath, "utf-8").split("\n").filter(Boolean);
+          let regressions = 0;
+          for (const line of lines) {
+            try { const t = JSON.parse(line); if (isRegression(t.from, t.to)) regressions++; } catch { /* skip */ }
+          }
+          if (regressions > 0) regStr = ` ⚠️ ${regressions} regressions`;
+        } catch { /* ignore */ }
+      }
       console.log(`  ${gs.name} (${gs.kind}): ${done}/${total} done${regStr}`);
     }
   }
@@ -300,12 +311,10 @@ program.command("inject-header <name>").description("Inject working-dir header i
 // ── progress ──────────────────────────────────────────────
 program.command("progress [name]")
   .description("Show item-level progress from *-state.json files. Omit name for all loops.")
-  .option("--track", "Record current state as transition snapshot", false)
   .option("--history", "Show full transition history", false)
   .option("--regressions", "Show only regressions (rejected/reverted items)", false)
-  .action((name: string | undefined, opts: { track: boolean; history: boolean; regressions: boolean }) => {
+  .action((name: string | undefined, opts: { history: boolean; regressions: boolean }) => {
     const goalReader = new GoalStateReader();
-    const tracker = new TransitionTracker();
 
     // Determine which CWDs to scan
     const targets: Array<{ label: string; cwd: string }> = [];
@@ -313,7 +322,6 @@ program.command("progress [name]")
       const procs = pm2.listRalph();
       const proc = pm2.findByName(procs, name);
       if (!proc) {
-        // Fallback: treat name as a directory path
         targets.push({ label: name, cwd: name });
       } else {
         targets.push({ label: proc.name, cwd: proc.cwd });
@@ -336,40 +344,47 @@ program.command("progress [name]")
       console.log(`${"═".repeat(60)}`);
 
       for (const gs of goalStates) {
-        // Optionally record transitions
-        if (opts.track) {
-          const newTransitions = tracker.record(gs);
-          if (newTransitions.length > 0) {
-            console.log(`\n  📝 Recorded ${newTransitions.length} new transitions:`);
-            console.log(formatTransitionSummary(newTransitions));
-          }
-        }
-
         console.log(formatGoalProgress(gs));
 
-        // Show transition summary
-        const summary = tracker.summarize(gs.filePath);
-        if (summary.total > 0) {
-          console.log(`  Transitions: ${summary.total} total (${summary.forward} forward, ${summary.regressions} regressions, ${summary.newItem} new)`);
-        }
+        // Read transition log if it exists
+        const logPath = gs.filePath.replace(/\.json$/, ".transitions.jsonl");
+        if (existsSync(logPath)) {
+          const { readFileSync } = require("fs");
+          const lines = readFileSync(logPath, "utf-8").split("\n").filter(Boolean);
+          if (lines.length > 0) {
+            let forward = 0, regressions = 0, newItem = 0;
+            for (const line of lines) {
+              try {
+                const t = JSON.parse(line);
+                if (t.from === "(new)") newItem++;
+                else if (isRegression(t.from, t.to)) regressions++;
+                else forward++;
+              } catch { /* skip */ }
+            }
+            console.log(`  Transitions: ${lines.length} total (${forward} forward, ${regressions} regressions, ${newItem} new)`);
 
-        // Show history if requested
-        if (opts.history) {
-          const history = tracker.readHistory(gs.filePath);
-          if (history.length > 0) {
-            console.log(`\n  Timeline:`);
-            console.log(tracker.formatTimeline(history));
-          }
-        }
+            if (opts.regressions && regressions > 0) {
+              console.log(`\n  ⚠️ Regressions:`);
+              for (const line of lines) {
+                try {
+                  const t = JSON.parse(line);
+                  if (isRegression(t.from, t.to)) {
+                    console.log(`  ${t.ts.slice(0, 19)}  ${t.itemId}: ${canonicalPhase(t.from)} → ${canonicalPhase(t.to)} ⚠️`);
+                  }
+                } catch { /* skip */ }
+              }
+            }
 
-        // Show regressions if requested
-        if (opts.regressions) {
-          const regressions = tracker.findRegressions(gs.filePath);
-          if (regressions.length > 0) {
-            console.log(`\n  ⚠️ Regressions:`);
-            console.log(tracker.formatTimeline(regressions));
-          } else {
-            console.log(`\n  ✅ No regressions detected.`);
+            if (opts.history) {
+              console.log(`\n  Timeline:`);
+              for (const line of lines) {
+                try {
+                  const t = JSON.parse(line);
+                  const reg = isRegression(t.from, t.to) ? " ⚠️ REGRESSION" : "";
+                  console.log(`  ${t.ts.slice(0, 19)}  ${t.itemId}: ${canonicalPhase(t.from)} → ${canonicalPhase(t.to)}${reg}`);
+                } catch { /* skip */ }
+              }
+            }
           }
         }
       }
